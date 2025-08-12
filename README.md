@@ -227,6 +227,50 @@ curl https://www.cloudflare.com/cdn-cgi/trace | grep warp
 # Should return: warp=on
 ```
 
+Configure WARP Split Tunneling
+
+To route only specific traffic (e.g., Google, YouTube, etc.) through WARP, update the **WireGuard configuration** file (`wgcf.conf`):
+
+```bash
+[Peer]
+PublicKey = xxxxxxxxxxxxxxxxx
+AllowedIPs = 162.159.192.0/24, 162.159.193.0/24, 162.159.195.0/24, 172.16.0.0/12  # Only allow specific traffic through WARP
+Endpoint = engage.cloudflareclient.com:2408
+```
+
+Configure V2Ray to Route Through WARP
+
+In the **V2Ray configuration** (`/usr/local/etc/v2ray/config.json`), add the following to route specific traffic (such as Google, YouTube, OpenAI) through WARP:
+
+```json
+{
+  "outbounds": [{
+    "protocol": "freedom",
+    "settings": {},
+    "streamSettings": {
+      "sockopt": {
+        "mark": 51820,
+        "interface": "wgcf"  # Ensure traffic goes through WARP interface
+      }
+    }
+  }],
+  "rules": [{
+    "type": "field",
+    "domain": [
+      "geosite:google",
+      "geosite:youtube",
+      "geosite:openai"
+    ],
+    "outboundTag": "warp-out"
+  }],
+  "outboundTags": [{
+    "tag": "warp-out",
+    "protocol": "freedom",
+    "settings": {}
+  }]
+}
+```
+
 ---
 
 ## ✅ Summary: Why This Setup is Hardened
