@@ -1,42 +1,33 @@
-# 🚀 Secure V2Ray Deployment Guide
+## 🚀 Secure V2Ray Deployment Guide
 
-VLESS + WebSocket + TLS + CDN + Nginx (Cloudflare + WARP Enhanced)
+VLESS + WebSocket + TLS + Cloudflare CDN + Nginx (WARP Enhanced)
 
----
+### 🧰 1. Prerequisites
 
-## 🧰 1. Prerequisites
+| Requirement | Description                                                   |
+| ----------- | ------------------------------------------------------------- |
+| VPS         | Offshore VPS (Debian 11+/Ubuntu 20.04+ recommended)           |
+| Domain      | Managed via Cloudflare, pointed to VPS IP                     |
+| Cloudflare  | CDN proxy enabled (orange cloud), SSL mode: **Full (Strict)** |
+| Open Ports  | **TCP 80, 443**                                               |
 
-| Requirement | Description                                                    |
-| ----------- | -------------------------------------------------------------- |
-| VPS         | Offshore VPS (Debian 11+ recommended)                          |
-| Domain      | Managed via Cloudflare, pointed to VPS IP                      |
-| Cloudflare  | CDN proxy enabled (orange cloud), SSL set to **Full (strict)** |
-| Open Ports  | TCP ports **80** and **443**                                   |
+### 🔐 2. Generate a Cloudflare API Token
 
----
+1. Log in to Cloudflare → **Profile** → **API Tokens**
+2. Click **Create Token** → **Edit zone DNS**
+3. Scope: Your domain → Save token
 
-## 🔐 2. Generate a Cloudflare API Token
-
-1. Log in to Cloudflare → Profile → **API Tokens**
-2. Click "**Create Token**" and select "**Edit zone DNS**"
-3. Set the token's scope to your domain
-3. Save the token for use with `acme.sh`
-
----
-
-## ⚙️ 3. Install Required Packages
+### ⚙️ 3. Install Required Packages
 
 ```bash
 apt update && apt upgrade -y
 apt install -y nginx curl socat uuid-runtime unzip fail2ban
 ```
 
----
-
-## 📜 4. Install acme.sh & Issue TLS Certificate
+### 📜 4. Install acme.sh & Issue TLS Certificate
 
 ```bash
-curl https://get.acme.sh | sh -s email=youremail@example.com
+curl https://get.acme.sh | sh -s email=you@example.com
 source ~/.bashrc
 
 export CF_Token="your_cloudflare_api_token"
@@ -44,7 +35,7 @@ export CF_Token="your_cloudflare_api_token"
 # Issue ECC certificate
 acme.sh --issue --dns dns_cf -d yourdomain.com --keylength ec-256
 
-# Install and configure auto-renew
+# Install & auto-renew
 mkdir -p /etc/nginx/ssl
 acme.sh --install-cert -d yourdomain.com \
 --key-file /etc/nginx/ssl/yourdomain.key \
@@ -52,35 +43,29 @@ acme.sh --install-cert -d yourdomain.com \
 --reloadcmd "systemctl reload nginx"
 ```
 
----
-
-## 📦 5. Install V2Ray (Official Script)
+### 📦 5. Install V2Ray
 
 ```bash
 bash <(curl -Ls https://github.com/v2fly/fhs-install-v2ray/raw/master/install-release.sh)
 ```
 
----
-
-## ⚡ 6. Configure V2Ray
-
-Generate a UUID:
-
-```bash
-uuidgen
-```
-
-Edit `/usr/local/etc/v2ray/config.json`:
+### ⚡ 6. Configure V2Ray (`/usr/local/etc/v2ray/config.json`)
 
 ```json
 {
+  "log": {
+    "loglevel": "warning"
+  },
+  "dns": {
+    "servers": ["1.1.1.1", "8.8.8.8", "8.8.4.4"]
+  },
   "inbounds": [{
     "port": 10000,
     "listen": "127.0.0.1",
     "protocol": "vless",
     "settings": {
       "clients": [{
-        "id": "your-uuid-here",
+        "id": "your_uuid",
         "flow": ""
       }],
       "decryption": "none"
@@ -89,29 +74,51 @@ Edit `/usr/local/etc/v2ray/config.json`:
       "network": "ws",
       "security": "none",
       "wsSettings": {
-        "path": "/api/status"
+        "path": "/raypath"
       }
     }
   }],
-  "outbounds": [{
-    "protocol": "freedom",
-    "settings": {}
-  }]
+  "outbounds": [
+    {
+      "tag": "warp-out",
+      "protocol": "freedom",
+      "settings": {},
+      "streamSettings": {
+        "sockopt": {
+          "interface": "wgcf"
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "ip": ["geoip:cn", "geoip:private"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "domain": ["geosite:cn"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "warp-out"
+      }
+    ]
+  }
 }
 ```
 
----
-
-## 🌐 7. Configure Nginx (with Rate Limiting & Obfuscation)
-
-Create a dummy site:
-
-```bash
-mkdir -p /var/www/html
-echo "<h1>Welcome</h1>" > /var/www/html/index.html
-```
-
-Edit `/etc/nginx/sites-available/default`:
+### 🌐 7. Configure Nginx (with Reverse Proxy & Rate Limiting)
 
 ```nginx
 server {
@@ -150,140 +157,67 @@ server {
 }
 ```
 
----
+### 🌍 8. WARP WireGuard Config (`/etc/wireguard/wgcf.conf`)
 
-## 🟢 8. Start Services
+```ini
+[Interface]
+PrivateKey = 6Cld6l3EnFQFiiKLEBzhcLb88oKjD9D3tH9wZol7ZFE=
+Address = 172.16.0.2/32, 2606:4700:110:8f8b:dde9:e82a:c46b:34ed/128
+DNS = 1.1.1.1,8.8.8.8,8.8.4.4
+MTU = 1420
+PostUp = ip -4 rule add from 107.172.82.25 lookup main prio 18
+PostDown = ip -4 rule delete from 107.172.82.25 lookup main prio 18
+
+[Peer]
+PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = engage.cloudflareclient.com:2408
+```
+
+### 🟢 9. Start Services
 
 ```bash
 systemctl restart v2ray
-systemctl restart nginx
 systemctl enable v2ray
-systemctl enable nginx
+systemctl restart wg-quick@wgcf
+systemctl enable wg-quick@wgcf
+systemctl restart nginx
 ```
 
----
+### 🛡️ 10. Security Hardening
 
-## 🛡️ 9. Harden Security with Fail2Ban
-
+- Fail2Ban
 ```bash
 systemctl enable fail2ban
 systemctl start fail2ban
 ```
+- Cloudflare Bot Fight Mode
+- WAF & Rate Limiting
 
-> Protects against port scanning and brute-force attacks.
+### 📲 11. Client Settings (V2RayN/V2RayNG)
 
----
+| Field      | Value                                |
+| ---------- | ------------------------------------ |
+| Address    | yourdomain.com                       |
+| Port       | 443                                  |
+| UUID       | your_uuid                            |
+| Encryption | none (VLESS)                         |
+| Transport  | WebSocket                            |
+| Path       | /raypath                             |
+| TLS        | Enabled                              |
+| Host (SNI) | yourdomain.com                       |
 
-## ☁️ 10. Cloudflare DNS Settings
 
-- **A record**: Points to VPS IP
-- **Proxy status**: Enabled (orange cloud)
-- **SSL/TLS**: Full (strict)
-- Optional:
-  - Enable Bot Fight Mode
-  - Enable Rate Limiting, WAF rules
+### 🔗 12. VLESS Link
 
----
-
-## 📲 11. V2RayN / V2RayNG Client Settings
-
-| Field      | Value                 |
-| ---------- | --------------------- |
-| Address    | yourdomain.com        |
-| Port       | 443                   |
-| UUID       | (your generated UUID) |
-| Encryption | none (VLESS)          |
-| Transport  | WebSocket             |
-| Path       | `/api/status`         |
-| TLS        | Enabled               |
-| Host (SNI) | yourdomain.com        |
-
----
-
-## 🔗 12. Generate VLESS Link
-
-```bash
-vless://your-uuid@yourdomain.com:443?encryption=none&security=tls&type=ws&host=yourdomain.com&path=%2Fapi%2Fstatus#VLESS-CDN
+```perl
+vless://your_uuid@yourdomain.com:443?encryption=none&security=tls&type=ws&host=yourdomain.com&path=%2Fapi%2Fstatus#VLESS-CDN
 ```
 
----
+### ✅ Why This Setup Is Secure
 
-## 🌍 13. Optional: Install WARP (for DNS Poisoning Protection)
-
-Install via Script:
-
-```bash
-bash <(curl -fsSL https://git.io/warp.sh)
-```
-
-- Add WARP IPv4/IPv6
-- Enable full outbound via WARP
-- Great for solving acme.sh DNS issues
-
-Verify:
-
-```bash
-curl https://www.cloudflare.com/cdn-cgi/trace | grep warp
-# Should return: warp=on
-```
-
-Configure WARP Split Tunneling
-
-To route only specific traffic (e.g., Google, YouTube, etc.) through WARP, update the **WireGuard configuration** file (`wgcf.conf`):
-
-```bash
-[Peer]
-PublicKey = xxxxxxxxxxxxxxxxx
-AllowedIPs = 162.159.192.0/24, 162.159.193.0/24, 162.159.195.0/24, 172.16.0.0/12  # Only allow specific traffic through WARP
-Endpoint = engage.cloudflareclient.com:2408
-```
-
-Configure V2Ray to Route Through WARP
-
-In the **V2Ray configuration** (`/usr/local/etc/v2ray/config.json`), add the following to route specific traffic (such as Google, YouTube, OpenAI) through WARP:
-
-```json
-{
-  "outbounds": [{
-    "protocol": "freedom",
-    "settings": {},
-    "streamSettings": {
-      "sockopt": {
-        "mark": 51820,
-        "interface": "wgcf"  # Ensure traffic goes through WARP interface
-      }
-    }
-  }],
-  "rules": [{
-    "type": "field",
-    "domain": [
-      "geosite:google",
-      "geosite:youtube",
-      "geosite:openai"
-    ],
-    "outboundTag": "warp-out"
-  }],
-  "outboundTags": [{
-    "tag": "warp-out",
-    "protocol": "freedom",
-    "settings": {}
-  }]
-}
-```
-
----
-
-## ✅ Summary: Why This Setup is Hardened
-
-| Feature             | Benefit                         |
-| ------------------- | ------------------------------- |
-| VLESS + WS + TLS    | Obfuscated + Encrypted traffic  |
-| Nginx Reverse Proxy | Front-facing domain camouflage  |
-| Cloudflare CDN      | Hides real server IP            |
-| Real Website Cover  | Fake landing page via Nginx     |
-| Fail2Ban            | Brute-force and scanner defense |
-| Rate Limiting       | Basic anti-bot protection       |
-| Optional WARP       | Avoids DNS pollution/censorship |
-
-
----
+- **VLESS + WS + TLS**: Encrypted, stealthy
+- **Cloudflare CDN**: Real IP hidden
+- **Nginx Reverse Proxy**: Legitimate cover page
+- **Fail2Ban** + Rate Limiting: Bot & scanner defense
+- **WARP**: Foreign traffic accelerated & DNS poisoning bypass
